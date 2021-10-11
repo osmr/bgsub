@@ -189,16 +189,17 @@ if __name__ == "__main__":
                 url=url,
                 input_image_path=image_file_path,
                 do_jpeg_recompress=jpg)
+            # NOTE(i.rodin): Remove resizing when api will return correct size
+            mask_raw = cv2.resize(mask_raw, (image.shape[1], image.shape[0]))
             if middle_mask_dir_path is not None:
                 if not os.path.exists(middle_record_dir_path):
                     os.mkdir(middle_record_dir_path)
+
                 cv2.imwrite(mask_raw_file_path, mask_raw)
 
         mask = ((mask_raw[:, :, 3] >= threshold).astype(np.uint8) * 255).astype(np.uint8)
 
-        # NOTE(i.rodin): Remove comment on assert when it gonna be fixed, and remove mask resizing.
-        # assert image.shape[0] == mask.shape, 'Output mask shape is not the same as input'
-        mask = cv2.resize(mask, (image.shape[1], image.shape[0]))
+        assert image.shape[:2] == mask.shape, 'Output mask shape is not the same as input'
 
         if args.debug:
             # NOTE(i.rodin): Assuming we have all masks similar sizes
