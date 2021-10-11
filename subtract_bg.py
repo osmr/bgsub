@@ -30,6 +30,7 @@ def parse_args():
     parser.add_argument("--input", type=str, required=True, help="input images directory path")
     parser.add_argument("--output", type=str, required=True, help="output masks directory path")
     parser.add_argument("--middle", type=str, help="optional directory path for raw masks from service")
+    parser.add_argument("--jpg", action="store_true", help="optional forced recompression an input image as JPG")
     args = parser.parse_args()
     return args
 
@@ -62,7 +63,8 @@ def get_image_file_paths_with_subdirs(dir_path):
 def create_mask_via_service(service,
                             token,
                             url,
-                            input_image_path):
+                            input_image_path,
+                            do_jpeg_recompress):
     """
     Process image via benzin.io/remove.bg service.
 
@@ -76,6 +78,8 @@ def create_mask_via_service(service,
         Optional custom URL for service.
     input_image_path : str
         Path to input image file.
+    do_jpeg_recompress : bool
+        Whether to do forced recompression an input image as JPG.
 
     Returns:
     -------
@@ -92,14 +96,19 @@ def create_mask_via_service(service,
         data = {"size": "auto", "format": "auto"}
     else:
         raise NotImplemented("Wrong service name: {}".format(service))
-    with open(input_image_path, "rb") as f:
-        response = requests.post(
-            url=service_url,
-            files={"image_file": f},
-            data=data,
-            headers={"X-Api-Key": token},
-        )
+    if do_jpeg_recompress:
+        image = cv2.imread(input_image_path, flags=cv2.IMREAD_UNCHANGED)
+        file = cv2.imencode(".jpg", image)[1].tobytes()
+    else:
+        file = open(input_image_path, "rb").read()
+    response = requests.post(
+        url=service_url,
+        files={"image_file": file},
+        data=data,
+        headers={"X-Api-Key": token},
+    )
     if response.status_code == requests.codes.ok:
+
         # assert (output_mask_path is not None)
         # with open(output_mask_path, "wb") as out:
         #     out.write(response.content)
@@ -120,6 +129,7 @@ if __name__ == "__main__":
     input_image_dir_path = args.input
     output_mask_dir_path = args.output
     middle_mask_dir_path = args.middle
+    jpg = args.jpg
 
     assert (service in ("benzinio", "removebg"))
     assert (token is not None) and (type(token) is str) and (len(token) > 0)
@@ -165,7 +175,8 @@ if __name__ == "__main__":
                 service=service,
                 token=token,
                 url=url,
-                input_image_path=image_file_path)
+                input_image_path=image_file_path,
+                do_jpeg_recompress=jpg)
             if middle_mask_dir_path is not None:
                 cv2.imwrite(mask_raw_file_path, mask_raw)
 

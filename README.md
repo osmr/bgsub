@@ -28,7 +28,8 @@ Here:
 Optional parameters:
 - `middle` is a directory with intermediate images with original masks obtained from the service (PNG with alpha mask),
 - `threshold` is a threshold for mask binarization (default value is 127),
-- `url` is a optional custom URL for service.
+- `url` is an optional custom URL for service,
+- `jpg` is a flag for forced recompression an input image as JPG (should use as `--jpg`).
 
 ## Remark
 
