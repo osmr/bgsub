@@ -1,5 +1,5 @@
 """
-    Automatic Image Background Subtraction via RemoteBG service.
+    Automatic Image Background Subtraction via benzin.io/remove.bg service.
 """
 
 import os
@@ -22,11 +22,14 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Automatic Image Background Subtraction",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument("--token", type=str, required=True, help="RemoveBG API token")
+    parser.add_argument("--service", type=str, default="benzinio",
+                        help="service name. options are `benzinio` or `removebg`")
+    parser.add_argument("--token", type=str, required=True, help="service API token")
+    parser.add_argument("--url", type=str, help="optional custom URL for service")
+    parser.add_argument("--threshold", type=int, default=127, help="threshol for alpha mask binarization")
     parser.add_argument("--input", type=str, required=True, help="input images directory path")
     parser.add_argument("--output", type=str, required=True, help="output masks directory path")
     parser.add_argument("--middle", type=str, help="optional directory path for raw masks from service")
-    parser.add_argument("--threshold", type=int, default=127, help="threshol for alpha mask binarization")
     args = parser.parse_args()
     return args
 
@@ -56,30 +59,44 @@ def get_image_file_paths_with_subdirs(dir_path):
     return image_file_paths
 
 
-def create_mask_via_remotebg(token,
-                             input_image_path):
+def create_mask_via_service(service,
+                            token,
+                            url,
+                            input_image_path):
     """
-    Process image via RemoteBG service.
+    Process image via benzin.io/remove.bg service.
 
     Parameters:
     ----------
+    service : str
+        Service name.
     token : str
         RemoteBG API token.
+    url : str
+        Optional custom URL for service.
     input_image_path : str
         Path to input image file.
-    output_mask_path : str
-        Path to output mask file.
 
     Returns:
     -------
     image : np.array
         Output mask.
     """
+    default_url_dict = {
+        "benzinio": "https://api.benzin.io/v1/removeBackground",
+        "removebg": "https://api.remove.bg/v1.0/removebg"}
+    service_url = url if url is not None else default_url_dict[service]
+    if service == "benzinio":
+        data = {"size": "full", "output_format": "image"}
+    elif service == "removebg":
+        data = {"size": "auto", "format": "auto"}
+    else:
+        raise NotImplemented("Wrong service name: {}".format(service))
     with open(input_image_path, "rb") as f:
         response = requests.post(
-            url="https://api.remove.bg/v1.0/removebg",
+            url=service_url,
             files={"image_file": f},
-            data={"size": "auto", "format": "auto"},
+            data=data,
             headers={"X-Api-Key": token},
         )
     if response.status_code == requests.codes.ok:
@@ -96,12 +113,15 @@ def create_mask_via_remotebg(token,
 
 if __name__ == "__main__":
     args = parse_args()
+    service = args.service
     token = args.token
+    url = args.url
+    threshold = args.threshold
     input_image_dir_path = args.input
     output_mask_dir_path = args.output
     middle_mask_dir_path = args.middle
-    threshold = args.threshold
 
+    assert (service in ("benzinio", "removebg"))
     assert (token is not None) and (type(token) is str) and (len(token) > 0)
     assert (threshold is not None) and (type(threshold) is int) and (0 <= threshold <= 255)
 
@@ -128,9 +148,9 @@ if __name__ == "__main__":
 
         if os.path.exists(dst_file_path):
             mask = cv2.imread(dst_file_path, flags=cv2.IMREAD_UNCHANGED)
-            cv2.imshow("image", image)
-            cv2.imshow("mask", mask)
-            cv2.waitKey()
+            # cv2.imshow("image", image)
+            # cv2.imshow("mask", mask)
+            # cv2.waitKey()
             continue
 
         mask_raw = None
@@ -139,20 +159,21 @@ if __name__ == "__main__":
             mask_raw_file_path = "{}.png".format(os.path.join(middle_mask_dir_path, os.path.basename(src_file_stem)))
             if os.path.exists(mask_raw_file_path):
                 mask_raw = cv2.imread(mask_raw_file_path, flags=cv2.IMREAD_UNCHANGED)
-                cv2.imshow("image", image)
-                cv2.imshow("mask_raw", mask_raw)
-                cv2.waitKey()
 
         if mask_raw is None:
-            mask_raw = create_mask_via_remotebg(
+            mask_raw = create_mask_via_service(
+                service=service,
                 token=token,
+                url=url,
                 input_image_path=image_file_path)
             if middle_mask_dir_path is not None:
                 cv2.imwrite(mask_raw_file_path, mask_raw)
 
         mask = ((mask_raw[:, :, 3] >= threshold).astype(np.uint8) * 255).astype(np.uint8)
 
-        cv2.imshow("mask", mask)
-        cv2.waitKey()
+        # cv2.imshow("image", image)
+        # cv2.imshow("mask_raw", mask_raw)
+        # cv2.imshow("mask", mask)
+        # cv2.waitKey()
 
         cv2.imwrite(dst_file_path, mask)
