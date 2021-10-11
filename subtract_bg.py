@@ -1,15 +1,13 @@
 """
     Automatic Image Background Subtraction via benzin.io/remove.bg service.
 """
-import copy
 import os
 import argparse
 import requests
+import numpy as np
 from tqdm import tqdm
 from pathlib import Path
-
 import cv2
-import numpy as np
 
 
 def parse_args():
@@ -32,8 +30,12 @@ def parse_args():
     parser.add_argument("--input", type=str, required=True, help="input images directory path")
     parser.add_argument("--output", type=str, required=True, help="output masks directory path")
     parser.add_argument("--middle", type=str, required=True, help="optional directory path for raw masks from service")
+    parser.add_argument("--ppdir", action="store_true", default=False,
+                        help="add extra parrent+parrent directory to the output one")
     parser.add_argument("--jpg", action="store_true", help="optional forced recompression an input image as JPG")
-    parser.add_argument("--debug", action="store_true", default=False, help="Debug images")
+    parser.add_argument("--not-resize", action="store_true", default=False,
+                        help="suppress to forcibly scale the mask to the input image")
+    parser.add_argument("--debug", action="store_true", default=False, help="debug mode")
     args = parser.parse_args()
     return args
 
@@ -111,16 +113,44 @@ def create_mask_via_service(service,
         headers={"X-Api-Key": token},
     )
     if response.status_code == requests.codes.ok:
-
-        # assert (output_mask_path is not None)
-        # with open(output_mask_path, "wb") as out:
-        #     out.write(response.content)
-        # image = cv2.imread(dst_file_path)
         image = np.asarray(bytearray(response.content), dtype="uint8")
         image = cv2.imdecode(buf=image, flags=cv2.IMREAD_UNCHANGED)
     else:
         raise RuntimeError("Error: status={}, text={}".format(response.status_code, response.text))
     return image
+
+
+def create_output_file_path(src_file_path,
+                            output_dir_path,
+                            add_ppdir):
+    """
+    Create path to output file (mask).
+
+    Parameters:
+    ----------
+    dst_file_path : str
+        Path to an input file (image).
+    output_dir_path : str
+        Path to output base directory.
+    add_ppdir : bool
+        Whether to add extra parrent+parrent directory to the output one.
+
+    Returns:
+    -------
+    dst_file_path : str
+        Path to output file (mask).
+    """
+    src_file_stem, _ = os.path.splitext(src_file_path)
+    if add_ppdir:
+        pp_dir_name = Path(src_file_stem).parent.parent.name
+        real_output_dir_path = os.path.join(output_dir_path, pp_dir_name)
+        if not os.path.exists(real_output_dir_path):
+            os.mkdir(real_output_dir_path)
+    else:
+        real_output_dir_path = output_dir_path
+    dst_file_stem_path = os.path.join(real_output_dir_path, os.path.basename(src_file_stem))
+    dst_file_path = "{}.png".format(dst_file_stem_path)
+    return dst_file_path
 
 
 if __name__ == "__main__":
@@ -131,12 +161,15 @@ if __name__ == "__main__":
     threshold = args.threshold
     input_image_dir_path = args.input
     output_mask_dir_path = args.output
-    middle_mask_dir_path = args.middle
+    raw_mask_dir_path = args.middle
+    add_ppdir = args.ppdir
     jpg = args.jpg
+    preserve_size = not args.not_resize
+    debug_mode = args.debug
 
-    if args.debug:
-        cv2.namedWindow('debug', cv2.WINDOW_NORMAL)
-        cv2.resizeWindow('debug', 2000, 600)
+    if debug_mode:
+        cv2.namedWindow("debug", flags=cv2.WINDOW_NORMAL)
+        cv2.resizeWindow("debug", 2000, 600)
 
     assert (service in ("benzinio", "removebg"))
     assert (token is not None) and (type(token) is str) and (len(token) > 0)
@@ -150,64 +183,55 @@ if __name__ == "__main__":
     if not os.path.exists(output_mask_dir_path):
         os.mkdir(output_mask_dir_path)
 
-    middle_mask_dir_path = os.path.expanduser(middle_mask_dir_path)
-    if not os.path.exists(middle_mask_dir_path):
-        os.mkdir(middle_mask_dir_path)
+    raw_mask_dir_path = os.path.expanduser(raw_mask_dir_path)
+    if not os.path.exists(raw_mask_dir_path):
+        os.mkdir(raw_mask_dir_path)
 
     image_file_path_list = get_image_file_paths_with_subdirs(input_image_dir_path)
 
     for image_file_path in tqdm(image_file_path_list):
-        src_file_stem, _ = os.path.splitext(image_file_path)
-        # NOTE(i.rodin): That's weird a bit, but we want to have specific output folder's in tree.
-        record_folder_name = Path(src_file_stem).parent.parent.name
-        mask_dir_path = os.path.join(output_mask_dir_path, record_folder_name)
-        dst_file_stem_path = os.path.join(mask_dir_path, os.path.basename(src_file_stem))
-        if not os.path.exists(mask_dir_path):
-            os.mkdir(mask_dir_path)
-
-        dst_file_path = "{}.png".format(dst_file_stem_path)
-
         image = cv2.imread(image_file_path, flags=cv2.IMREAD_UNCHANGED)
 
-        if os.path.exists(dst_file_path):
+        mask_file_path = create_output_file_path(
+            src_file_path=image_file_path,
+            output_dir_path=output_mask_dir_path,
+            add_ppdir=add_ppdir)
+
+        if os.path.exists(mask_file_path):
             continue
 
-        mask_raw = None
-        mask_raw_file_path = None
-        middle_record_dir_path = None
+        raw_mask = None
+        raw_mask_file_path = None
 
-        if middle_mask_dir_path is not None:
-            middle_record_dir_path = os.path.join(middle_mask_dir_path, record_folder_name)
-            mask_raw_file_path = "{}.png".format(os.path.join(middle_record_dir_path, os.path.basename(src_file_stem)))
-            if os.path.exists(mask_raw_file_path):
-                mask_raw = cv2.imread(mask_raw_file_path, flags=cv2.IMREAD_UNCHANGED)
+        if raw_mask_dir_path is not None:
+            raw_mask_file_path = create_output_file_path(
+                src_file_path=image_file_path,
+                output_dir_path=raw_mask_dir_path,
+                add_ppdir=add_ppdir)
+            if os.path.exists(raw_mask_file_path):
+                raw_mask = cv2.imread(raw_mask_file_path, flags=cv2.IMREAD_UNCHANGED)
 
-        if mask_raw is None:
-            mask_raw = create_mask_via_service(
+        if raw_mask is None:
+            raw_mask = create_mask_via_service(
                 service=service,
                 token=token,
                 url=url,
                 input_image_path=image_file_path,
                 do_jpeg_recompress=jpg)
-            # NOTE(i.rodin): Remove resizing when api will return correct size
-            mask_raw = cv2.resize(mask_raw, (image.shape[1], image.shape[0]))
-            if middle_mask_dir_path is not None:
-                if not os.path.exists(middle_record_dir_path):
-                    os.mkdir(middle_record_dir_path)
+            if preserve_size and (raw_mask.shape[:2] != image.shape[:2]):
+                raw_mask = cv2.resize(raw_mask, dsize=image.shape[:2])
+            if raw_mask_dir_path is not None:
+                cv2.imwrite(raw_mask_file_path, raw_mask)
 
-                cv2.imwrite(mask_raw_file_path, mask_raw)
+        mask = ((raw_mask[:, :, 3] >= threshold).astype(np.uint8) * 255).astype(np.uint8)
 
-        mask = ((mask_raw[:, :, 3] >= threshold).astype(np.uint8) * 255).astype(np.uint8)
-
-        assert image.shape[:2] == mask.shape, 'Output mask shape is not the same as input'
-
-        if args.debug:
+        if debug_mode:
             # NOTE(i.rodin): Assuming we have all masks similar sizes
             mask_to_show = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-            mask_as_alpha = copy.deepcopy(mask_to_show)
+            mask_as_alpha = mask_to_show.copy()
             mask_as_alpha[mask_as_alpha > 0] = 1
-            stack = np.hstack([image, mask_to_show, cv2.multiply(image, mask_as_alpha)])
-            cv2.imshow('debug', stack)
+            stack_image = np.hstack([image, mask_to_show, cv2.multiply(image, mask_as_alpha)])
+            cv2.imshow("debug", stack_image)
             cv2.waitKey()
 
-        cv2.imwrite(dst_file_path, mask)
+        cv2.imwrite(mask_file_path, mask)
