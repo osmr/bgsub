@@ -25,6 +25,8 @@ def parse_args():
     parser.add_argument("--token", type=str, required=True, help="RemoveBG API token")
     parser.add_argument("--input", type=str, required=True, help="input images directory path")
     parser.add_argument("--output", type=str, required=True, help="output masks directory path")
+    parser.add_argument("--middle", type=str, help="optional directory path for raw masks from service")
+    parser.add_argument("--threshold", type=int, default=127, help="threshol for alpha mask binarization")
     args = parser.parse_args()
     return args
 
@@ -54,9 +56,8 @@ def get_image_file_paths_with_subdirs(dir_path):
     return image_file_paths
 
 
-def get_mask_via_remotebg(token,
-                          input_image_path,
-                          output_mask_path):
+def create_mask_via_remotebg(token,
+                             input_image_path):
     """
     Process image via RemoteBG service.
 
@@ -74,21 +75,22 @@ def get_mask_via_remotebg(token,
     image : np.array
         Output mask.
     """
-    assert (output_mask_path is not None)
-    response = requests.post(
-        "https://api.remove.bg/v1.0/removebg",
-        files={'image_file': open(input_image_path, "rb")},
-        data={"size": "auto"},
-        headers={"X-Api-Key": token},
-    )
+    with open(input_image_path, "rb") as f:
+        response = requests.post(
+            url="https://api.remove.bg/v1.0/removebg",
+            files={"image_file": f},
+            data={"size": "auto", "format": "auto"},
+            headers={"X-Api-Key": token},
+        )
     if response.status_code == requests.codes.ok:
+        # assert (output_mask_path is not None)
         # with open(output_mask_path, "wb") as out:
         #     out.write(response.content)
         # image = cv2.imread(dst_file_path)
         image = np.asarray(bytearray(response.content), dtype="uint8")
-        image = cv2.imdecode(image, cv2.IMREAD_COLOR)
+        image = cv2.imdecode(buf=image, flags=cv2.IMREAD_UNCHANGED)
     else:
-        raise RuntimeError("Error:", response.status_code, response.text)
+        raise RuntimeError("Error: status={}, text={}".format(response.status_code, response.text))
     return image
 
 
@@ -97,8 +99,11 @@ if __name__ == "__main__":
     token = args.token
     input_image_dir_path = args.input
     output_mask_dir_path = args.output
+    middle_mask_dir_path = args.middle
+    threshold = args.threshold
 
     assert (token is not None) and (type(token) is str) and (len(token) > 0)
+    assert (threshold is not None) and (type(threshold) is int) and (0 <= threshold <= 255)
 
     input_image_dir_path = os.path.expanduser(input_image_dir_path)
     if not os.path.exists(input_image_dir_path):
@@ -108,6 +113,10 @@ if __name__ == "__main__":
     if not os.path.exists(output_mask_dir_path):
         os.mkdir(output_mask_dir_path)
 
+    middle_mask_dir_path = os.path.expanduser(middle_mask_dir_path)
+    if not os.path.exists(middle_mask_dir_path):
+        os.mkdir(middle_mask_dir_path)
+
     image_file_path_list = get_image_file_paths_with_subdirs(input_image_dir_path)
 
     for image_file_path in tqdm(image_file_path_list):
@@ -115,23 +124,35 @@ if __name__ == "__main__":
         dst_file_stem_path = os.path.join(output_mask_dir_path, os.path.basename(src_file_stem))
         dst_file_path = "{}.png".format(dst_file_stem_path)
 
-        mask_rgb = get_mask_via_remotebg(
-            token=token,
-            input_image_path=image_file_path,
-            output_mask_path=dst_file_path)
-        mask = ((mask_rgb[:, :, 0] > 0).astype(np.uint8) * 255).astype(np.uint8)
-        cv2.imwrite(dst_file_path, mask)
+        image = cv2.imread(image_file_path, flags=cv2.IMREAD_UNCHANGED)
 
-        if not os.path.exists(dst_file_path):
-            mask_rgb = get_mask_via_remotebg(
-                token=token,
-                input_image_path=image_file_path,
-                output_mask_path=dst_file_path)
-            mask = ((mask_rgb[:, :, 0] > 0).astype(np.uint8) * 255).astype(np.uint8)
-            cv2.imwrite(dst_file_path, mask)
-        else:
-            image = cv2.imread(dst_file_path)
-            mask = ((image[:, :, 0] > 0).astype(np.uint8) * 255).astype(np.uint8)
+        if os.path.exists(dst_file_path):
+            mask = cv2.imread(dst_file_path, flags=cv2.IMREAD_UNCHANGED)
             cv2.imshow("image", image)
             cv2.imshow("mask", mask)
             cv2.waitKey()
+            continue
+
+        mask_raw = None
+        mask_raw_file_path = None
+        if middle_mask_dir_path is not None:
+            mask_raw_file_path = "{}.png".format(os.path.join(middle_mask_dir_path, os.path.basename(src_file_stem)))
+            if os.path.exists(mask_raw_file_path):
+                mask_raw = cv2.imread(mask_raw_file_path, flags=cv2.IMREAD_UNCHANGED)
+                cv2.imshow("image", image)
+                cv2.imshow("mask_raw", mask_raw)
+                cv2.waitKey()
+
+        if mask_raw is None:
+            mask_raw = create_mask_via_remotebg(
+                token=token,
+                input_image_path=image_file_path)
+            if middle_mask_dir_path is not None:
+                cv2.imwrite(mask_raw_file_path, mask_raw)
+
+        mask = ((mask_raw[:, :, 3] >= threshold).astype(np.uint8) * 255).astype(np.uint8)
+
+        cv2.imshow("mask", mask)
+        cv2.waitKey()
+
+        cv2.imwrite(dst_file_path, mask)
