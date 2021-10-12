@@ -219,7 +219,7 @@ if __name__ == "__main__":
                 input_image_path=image_file_path,
                 do_jpeg_recompress=jpg)
             if preserve_size and (raw_mask.shape[:2] != image.shape[:2]):
-                raw_mask = cv2.resize(raw_mask, dsize=image.shape[:2])
+                raw_mask = cv2.resize(raw_mask, dsize=image.shape[:2][::-1])
             if raw_mask_dir_path is not None:
                 cv2.imwrite(raw_mask_file_path, raw_mask)
 
