@@ -9,6 +9,7 @@ import numpy as np
 from tqdm import tqdm
 from pathlib import Path
 import cv2
+from typing import Tuple, Optional
 
 
 def parse_args():
@@ -30,7 +31,7 @@ def parse_args():
     parser.add_argument("--threshold", type=int, default=127, help="threshold for alpha mask binarization")
     parser.add_argument("--input", type=str, required=True, help="input images directory path")
     parser.add_argument("--output", type=str, required=True, help="output masks directory path")
-    parser.add_argument("--middle", type=str, required=True, help="optional directory path for raw masks from service")
+    parser.add_argument("--middle", type=str, required=False, help="optional directory path for raw masks from service")
     parser.add_argument("--ppdir", action="store_true", default=False,
                         help="add extra parrent+parrent directory to the output one")
     parser.add_argument("--jpg", action="store_true", help="optional forced recompression an input image as JPG")
@@ -154,6 +155,91 @@ def create_output_file_path(src_file_path,
     return dst_file_path
 
 
+def py3round(number):
+    """
+    Unified rounding in all python versions.
+    """
+    if abs(round(number) - number) == 0.5:
+        return int(2.0 * round(0.5 * number))
+    else:
+        return int(round(number))
+
+
+def resize_image_with_max_size(image: np.ndarray,
+                               max_size: int,
+                               interpolation: int = cv2.INTER_LINEAR) -> Tuple[np.ndarray, Tuple[int, int]]:
+    height, width = image.shape[:2]
+    scale = max_size / float(max(width, height))
+    if scale != 1.0:
+        new_height, new_width = tuple(py3round(dim * scale) for dim in (height, width))
+        image = cv2.resize(image, dsize=(new_width, new_height), interpolation=interpolation)
+    return image, (width, height)
+
+
+def create_image_with_mask(image: np.ndarray,
+                           mask: np.ndarray,
+                           max_size: Optional[int] = None) -> np.ndarray:
+    """
+    Create an image with mask for debug purpose.
+
+    Parameters:
+    ----------
+    image : np.array
+        Original RGB image.
+    mask : np.array
+        Mask image.
+    max_size : int or None
+        Maximal dimension for resulted image.
+
+    Returns:
+    -------
+    np.array
+        Destination image with mask.
+    """
+    if image.shape[:2] != mask.shape:
+        mask = cv2.resize(mask, dsize=image.shape[:2][::-1])
+        mask = (mask > 127).astype(np.uint8) * 255
+        assert (mask.dtype == np.uint8)
+    image_with_mask = cv2.addWeighted(
+        src1=image,
+        alpha=0.5,
+        src2=(cv2.cvtColor(255 - mask, cv2.COLOR_GRAY2RGB) * (0, 1, 0)).astype(np.uint8),
+        beta=0.5,
+        gamma=0.0)
+    image_with_mask = cv2.addWeighted(
+        src1=image_with_mask,
+        alpha=0.75,
+        src2=(cv2.cvtColor(mask, cv2.COLOR_GRAY2RGB) * (1, 0, 0)).astype(np.uint8),
+        beta=0.25,
+        gamma=0.0)
+    if max_size is not None:
+        image_with_mask, _ = resize_image_with_max_size(image_with_mask, max_size=max_size)
+    return image_with_mask
+
+
+def create_dubug_file_path(file_path: str,
+                           dst_file_ext: Optional[str] = ".jpg") -> str:
+    """
+    Create a file path for debug image.
+
+    Parameters:
+    ----------
+    file_path : str
+        Original image file path.
+    dst_file_ext : str
+        Destination file extension.
+
+    Returns:
+    -------
+    str
+        Destination image file path.
+    """
+    src_file_stem, src_file_ext = os.path.splitext(file_path)
+    dst_file_ext = dst_file_ext if dst_file_ext is not None else src_file_ext
+    dst_file_path = "{}_debug{}".format(src_file_stem, dst_file_ext)
+    return dst_file_path
+
+
 if __name__ == "__main__":
     args = parse_args()
     service = args.service
@@ -168,10 +254,6 @@ if __name__ == "__main__":
     preserve_size = not args.not_resize
     debug_mode = args.debug
 
-    if debug_mode:
-        cv2.namedWindow("debug", flags=cv2.WINDOW_NORMAL)
-        cv2.resizeWindow("debug", 2000, 600)
-
     assert (service in ("benzinio", "removebg"))
     assert (token is not None) and (type(token) is str) and (len(token) > 0)
     assert (threshold is not None) and (type(threshold) is int) and (0 <= threshold <= 255)
@@ -184,9 +266,10 @@ if __name__ == "__main__":
     if not os.path.exists(output_mask_dir_path):
         os.mkdir(output_mask_dir_path)
 
-    raw_mask_dir_path = os.path.expanduser(raw_mask_dir_path)
-    if not os.path.exists(raw_mask_dir_path):
-        os.mkdir(raw_mask_dir_path)
+    if raw_mask_dir_path is not None:
+        raw_mask_dir_path = os.path.expanduser(raw_mask_dir_path)
+        if not os.path.exists(raw_mask_dir_path):
+            os.mkdir(raw_mask_dir_path)
 
     image_file_path_list = get_image_file_paths_with_subdirs(input_image_dir_path)
 
@@ -199,6 +282,11 @@ if __name__ == "__main__":
             add_ppdir=add_ppdir)
 
         if os.path.exists(mask_file_path):
+            if debug_mode:
+                mask = cv2.imread(mask_file_path, flags=cv2.IMREAD_UNCHANGED)
+                image_with_mask = create_image_with_mask(image=image, mask=mask, max_size=None)
+                debug_file_path = create_dubug_file_path(mask_file_path)
+                cv2.imwrite(debug_file_path, image_with_mask)
             continue
 
         raw_mask = None
@@ -224,15 +312,6 @@ if __name__ == "__main__":
             if raw_mask_dir_path is not None:
                 cv2.imwrite(raw_mask_file_path, raw_mask)
 
-        mask = ((raw_mask[:, :, 3] >= threshold).astype(np.uint8) * 255).astype(np.uint8)
-
-        if debug_mode:
-            # NOTE(i.rodin): Assuming we have all masks similar sizes
-            mask_to_show = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-            mask_as_alpha = mask_to_show.copy()
-            mask_as_alpha[mask_as_alpha > 0] = 1
-            stack_image = np.hstack([image, mask_to_show, cv2.multiply(image, mask_as_alpha)])
-            cv2.imshow("debug", stack_image)
-            cv2.waitKey()
+        mask = ((raw_mask[:, :, 3] > threshold).astype(np.uint8) * 255).astype(np.uint8)
 
         cv2.imwrite(mask_file_path, mask)

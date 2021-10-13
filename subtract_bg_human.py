@@ -11,7 +11,8 @@ from pathlib import Path
 import cv2
 from segmentation_models_pytorch import Unet
 from torch.utils import model_zoo
-from typing import List, Tuple
+import segmentation_refinement as refine
+from typing import List, Tuple, Optional
 import torch
 
 
@@ -327,14 +328,19 @@ def create_tensor_from_rgb_image(image: np.ndarray) -> torch.Tensor:
 
 
 def create_image_with_mask(image: np.ndarray,
-                           mask: np.ndarray) -> np.ndarray:
+                           mask: np.ndarray,
+                           max_size: Optional[int] = None) -> np.ndarray:
     """
-    Create an image with mask for debugging.
+    Create an image with mask for debug purpose.
 
     Parameters:
     ----------
     image : np.array
-        Cropping image.
+        Original RGB image.
+    mask : np.array
+        Mask image.
+    max_size : int or None
+        Maximal dimension for resulted image.
 
     Returns:
     -------
@@ -343,17 +349,42 @@ def create_image_with_mask(image: np.ndarray,
     """
     image_with_mask = cv2.addWeighted(
         src1=image,
-        alpha=1.0,
+        alpha=0.5,
         src2=(cv2.cvtColor(255 - mask, cv2.COLOR_GRAY2RGB) * (0, 1, 0)).astype(np.uint8),
         beta=0.5,
         gamma=0.0)
     image_with_mask = cv2.addWeighted(
         src1=image_with_mask,
-        alpha=1.0,
+        alpha=0.75,
         src2=(cv2.cvtColor(mask, cv2.COLOR_GRAY2RGB) * (1, 0, 0)).astype(np.uint8),
-        beta=0.5,
+        beta=0.25,
         gamma=0.0)
+    if max_size is not None:
+        image_with_mask, _ = resize_image_with_max_size(image_with_mask, max_size=max_size)
     return image_with_mask
+
+
+def create_dubug_file_path(file_path: str,
+                           dst_file_ext: Optional[str] = ".jpg") -> str:
+    """
+    Create a file path for debug image.
+
+    Parameters:
+    ----------
+    file_path : str
+        Original image file path.
+    dst_file_ext : str
+        Destination file extension.
+
+    Returns:
+    -------
+    str
+        Destination image file path.
+    """
+    src_file_stem, src_file_ext = os.path.splitext(file_path)
+    dst_file_ext = dst_file_ext if dst_file_ext is not None else src_file_ext
+    dst_file_path = "{}_debug{}".format(src_file_stem, dst_file_ext)
+    return dst_file_path
 
 
 def create_output_file_path(src_file_path: str,
@@ -405,6 +436,8 @@ if __name__ == "__main__":
         os.mkdir(output_mask_dir_path)
 
     net = create_net()
+    # refiner = refine.Refiner(device="cpu")
+    refiner = refine.Refiner(device='cuda:0')
 
     image_file_path_list = get_image_file_paths_with_subdirs(input_image_dir_path)
 
@@ -420,7 +453,7 @@ if __name__ == "__main__":
         bgr_image = cv2.imread(image_file_path, flags=cv2.IMREAD_UNCHANGED)
         rgb_image = cv2.cvtColor(bgr_image, code=cv2.COLOR_BGR2RGB)
 
-        base_size = 1280
+        base_size = 800
         rgb_image, rgb_image_size = resize_image_with_max_size(rgb_image, max_size=base_size)
         rgb_image, rgb_image_pad_params = pad_image_to_size(
             image=rgb_image,
@@ -436,19 +469,28 @@ if __name__ == "__main__":
             y = net(x)[0][0]
 
         mask = (y > 0).cpu().detach().numpy().astype(np.uint8)
+        mask = mask * 255
+
+        mask = refiner.refine(rgb_image, mask, fast=True, L=1200)
+
         mask = crop_image(mask, factor_pad_params)
 
         mask = crop_image(mask, rgb_image_pad_params)
         mask = resize_image(mask, image_size=rgb_image_size)
 
-        mask = mask * 255
+        mask = refiner.refine(bgr_image, mask, fast=True, L=1800)
+        mask = (mask > 127).astype(np.uint8) * 255
         assert (mask.dtype == np.uint8)
 
         cv2.imwrite(mask_file_path, mask)
 
         if debug_mode:
-            image_with_mask = create_image_with_mask(image=bgr_image, mask=mask)
+            image_with_mask = create_image_with_mask(image=bgr_image, mask=mask, max_size=None)
+            debug_file_path = create_dubug_file_path(mask_file_path)
+            cv2.imwrite(debug_file_path, image_with_mask)
+
             # cv2.imshow("image", bgr_image)
             # cv2.imshow("mask", mask * 255)
-            cv2.imshow("image_with_mask", image_with_mask)
-            cv2.waitKey()
+            # cv2.imshow("image_with_mask", resize_image_with_max_size(image_with_mask, max_size=1280)[0])
+            # cv2.imshow("image_with_mask2", resize_image_with_max_size(create_image_with_mask(image=bgr_image, mask=mask2), max_size=1280)[0])  # noqa
+            # cv2.waitKey()

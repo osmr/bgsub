@@ -7,3 +7,4 @@ opencv-python
 # For a script with human segmentation network:
 torch
 segmentation-models-pytorch
+segmentation-refinement
