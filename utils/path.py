@@ -27,7 +27,7 @@ def get_image_file_paths_with_subdirs(dir_path: str) -> List[str]:
     for subdir, dirs, files in os.walk(dir_path):
         for file_name in files:
             _, file_ext = os.path.splitext(file_name)
-            if file_ext.lower() == ".jpg":
+            if file_ext.lower() in (".jpg", ".png"):
                 image_file_path = os.path.join(subdir, file_name)
                 image_file_paths.append(image_file_path)
     image_file_paths = sorted(image_file_paths)

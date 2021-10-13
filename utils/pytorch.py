@@ -48,5 +48,11 @@ def create_tensor_from_rgb_image(image: np.ndarray) -> torch.Tensor:
     torch.Tensor
         Destination tensor.
     """
-    image = np.ascontiguousarray(np.transpose(image, (2, 0, 1)))
-    return torch.from_numpy(image)
+    image = np.ascontiguousarray(image.transpose((2, 0, 1)))
+    x = torch.from_numpy(image)
+
+    if isinstance(x, torch.ByteTensor):
+        default_float_dtype = torch.get_default_dtype()
+        return x.to(dtype=default_float_dtype).div(255)
+    else:
+        return x

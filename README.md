@@ -3,9 +3,12 @@
 [![GitHub License](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Python Version](https://img.shields.io/badge/python-3.7%2C3.8-lightgrey.svg)](https://github.com/osmr/bgsub)
 
-This repo contains a script for automatic one-shot image background subtraction task using the appropriate services:
+This repo contains set of scripts for automatic one-shot image background subtraction task using the following strategies:
+1. the appropriate background subtraction services (mostly human based):
 - [benzin.io](https://benzin.io/),
 - [remove.bg](https://www.remove.bg/).
+2. U-Net human segmentation [net](https://github.com/ternaus/people_segmentation) + CascadePSP refinement [net](https://github.com/hkchengrex/CascadePSP):
+3. BackgroundMattingV2 [net](https://github.com/PeterL1n/BackgroundMattingV2).
 
 ## Installation
 ```
@@ -42,6 +45,20 @@ Here:
 - `output` is a directory with resulted PNG binary masks (it is assumed that all original images had unique names).
 
 Optional parameters:
+- `ppdir` is a flag for adding extra parrent+parrent directory to the output one (should use as `--ppdir`).
+- `use-cuda` is a flag for using CUDA for network inference (should use as `--use-cuda`).
+
+3. Launch a script for background subtraction via matting network:
+```
+python subtract_bg_matting.py --input=<directory with images> --bg=<background image path> --output=<output directory with binary masks>
+```
+Here:
+- `input` is a directory with processing JPEG images (can contain subdirectories),
+- `bg` is a background image file path,
+- `output` is a directory with resulted PNG binary masks (it is assumed that all original images had unique names).
+
+Optional parameters:
+- `threshold` is a threshold for mask binarization (default value is 127),
 - `ppdir` is a flag for adding extra parrent+parrent directory to the output one (should use as `--ppdir`).
 - `use-cuda` is a flag for using CUDA for network inference (should use as `--use-cuda`).
 
