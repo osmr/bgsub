@@ -7,18 +7,19 @@ import argparse
 import requests
 import numpy as np
 from tqdm import tqdm
-from pathlib import Path
 import cv2
-from typing import Tuple, Optional
+from typing import Optional
+from utils.path import get_image_file_paths_with_subdirs, create_output_file_path, create_dubug_file_path
+from utils.image import create_image_with_mask
 
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     """
     Parse python script parameters.
 
     Returns:
     -------
-    ArgumentParser
+    argparse.Namespace
         Resulted args.
     """
     parser = argparse.ArgumentParser(
@@ -42,36 +43,11 @@ def parse_args():
     return args
 
 
-def get_image_file_paths_with_subdirs(dir_path):
-    """
-    Get all image file paths.
-
-    Parameters:
-    ----------
-    dir_path : str
-        Path to working directory.
-
-    Returns:
-    -------
-    list of str
-        Paths to image files.
-    """
-    image_file_paths = []
-    for subdir, dirs, files in os.walk(dir_path):
-        for file_name in files:
-            _, file_ext = os.path.splitext(file_name)
-            if file_ext.lower() == ".jpg":
-                image_file_path = os.path.join(subdir, file_name)
-                image_file_paths.append(image_file_path)
-    image_file_paths = sorted(image_file_paths)
-    return image_file_paths
-
-
-def create_mask_via_service(service,
-                            token,
-                            url,
-                            input_image_path,
-                            do_jpeg_recompress):
+def create_mask_via_service(service: str,
+                            token: str,
+                            url: Optional[str],
+                            input_image_path: str,
+                            do_jpeg_recompress: bool) -> np.array:
     """
     Process image via benzin.io/remove.bg service.
 
@@ -81,7 +57,7 @@ def create_mask_via_service(service,
         Service name.
     token : str
         RemoteBG API token.
-    url : str
+    url : str or None
         Optional custom URL for service.
     input_image_path : str
         Path to input image file.
@@ -102,7 +78,7 @@ def create_mask_via_service(service,
     elif service == "removebg":
         data = {"size": "auto", "format": "auto"}
     else:
-        raise NotImplemented("Wrong service name: {}".format(service))
+        raise NotImplementedError("Wrong service name: {}".format(service))
     if do_jpeg_recompress:
         image = cv2.imread(input_image_path, flags=cv2.IMREAD_UNCHANGED)
         file = cv2.imencode(".jpg", image)[1].tobytes()
@@ -120,124 +96,6 @@ def create_mask_via_service(service,
     else:
         raise RuntimeError("Error: status={}, text={}".format(response.status_code, response.text))
     return image
-
-
-def create_output_file_path(src_file_path,
-                            output_dir_path,
-                            add_ppdir):
-    """
-    Create path to output file (mask).
-
-    Parameters:
-    ----------
-    dst_file_path : str
-        Path to an input file (image).
-    output_dir_path : str
-        Path to output base directory.
-    add_ppdir : bool
-        Whether to add extra parrent+parrent directory to the output one.
-
-    Returns:
-    -------
-    dst_file_path : str
-        Path to output file (mask).
-    """
-    src_file_stem, _ = os.path.splitext(src_file_path)
-    if add_ppdir:
-        pp_dir_name = Path(src_file_stem).parent.parent.name
-        real_output_dir_path = os.path.join(output_dir_path, pp_dir_name)
-        if not os.path.exists(real_output_dir_path):
-            os.mkdir(real_output_dir_path)
-    else:
-        real_output_dir_path = output_dir_path
-    dst_file_stem_path = os.path.join(real_output_dir_path, os.path.basename(src_file_stem))
-    dst_file_path = "{}.png".format(dst_file_stem_path)
-    return dst_file_path
-
-
-def py3round(number):
-    """
-    Unified rounding in all python versions.
-    """
-    if abs(round(number) - number) == 0.5:
-        return int(2.0 * round(0.5 * number))
-    else:
-        return int(round(number))
-
-
-def resize_image_with_max_size(image: np.ndarray,
-                               max_size: int,
-                               interpolation: int = cv2.INTER_LINEAR) -> Tuple[np.ndarray, Tuple[int, int]]:
-    height, width = image.shape[:2]
-    scale = max_size / float(max(width, height))
-    if scale != 1.0:
-        new_height, new_width = tuple(py3round(dim * scale) for dim in (height, width))
-        image = cv2.resize(image, dsize=(new_width, new_height), interpolation=interpolation)
-    return image, (width, height)
-
-
-def create_image_with_mask(image: np.ndarray,
-                           mask: np.ndarray,
-                           max_size: Optional[int] = None) -> np.ndarray:
-    """
-    Create an image with mask for debug purpose.
-
-    Parameters:
-    ----------
-    image : np.array
-        Original RGB image.
-    mask : np.array
-        Mask image.
-    max_size : int or None
-        Maximal dimension for resulted image.
-
-    Returns:
-    -------
-    np.array
-        Destination image with mask.
-    """
-    if image.shape[:2] != mask.shape:
-        mask = cv2.resize(mask, dsize=image.shape[:2][::-1])
-        mask = (mask > 127).astype(np.uint8) * 255
-        assert (mask.dtype == np.uint8)
-    image_with_mask = cv2.addWeighted(
-        src1=image,
-        alpha=0.5,
-        src2=(cv2.cvtColor(255 - mask, cv2.COLOR_GRAY2RGB) * (0, 1, 0)).astype(np.uint8),
-        beta=0.5,
-        gamma=0.0)
-    image_with_mask = cv2.addWeighted(
-        src1=image_with_mask,
-        alpha=0.75,
-        src2=(cv2.cvtColor(mask, cv2.COLOR_GRAY2RGB) * (1, 0, 0)).astype(np.uint8),
-        beta=0.25,
-        gamma=0.0)
-    if max_size is not None:
-        image_with_mask, _ = resize_image_with_max_size(image_with_mask, max_size=max_size)
-    return image_with_mask
-
-
-def create_dubug_file_path(file_path: str,
-                           dst_file_ext: Optional[str] = ".jpg") -> str:
-    """
-    Create a file path for debug image.
-
-    Parameters:
-    ----------
-    file_path : str
-        Original image file path.
-    dst_file_ext : str
-        Destination file extension.
-
-    Returns:
-    -------
-    str
-        Destination image file path.
-    """
-    src_file_stem, src_file_ext = os.path.splitext(file_path)
-    dst_file_ext = dst_file_ext if dst_file_ext is not None else src_file_ext
-    dst_file_path = "{}_debug{}".format(src_file_stem, dst_file_ext)
-    return dst_file_path
 
 
 if __name__ == "__main__":
