@@ -1,6 +1,7 @@
 """
     Automatic Image Background Subtraction via benzin.io/remove.bg service.
 """
+
 import os
 import argparse
 import requests

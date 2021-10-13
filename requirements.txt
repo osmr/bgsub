@@ -1,4 +1,9 @@
+# For a script with segmentation service using:
 requests
 tqdm
 numpy
 opencv-python
+
+# For a script with human segmentation network:
+torch
+segmentation-models-pytorch
